@@ -1,0 +1,197 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h> 
+#include <OneWire.h> 
+#include <DallasTemperature.h> 
+#include <Servo.h> 
+ 
+// ============================= 
+// Pin Definitions 
+// ============================= 
+#define ONE_WIRE_BUS 2 
+#define TRIG_PIN 6 
+#define ECHO_PIN 7 
+#define BUZZER_PIN 4 
+#define SERVO_PIN 5 
+ 
+// ============================= 
+// Time Intervals (in ms) 
+// ============================= 
+#define SERVO_INTERVAL 5000                  // Servo feeding every 5 seconds 
+#define CLEAN_TANK_INTERVAL 120000           // Clean tank reminder every 2 minutes 
+#define EMERGENCY_DISPLAY_DURATION 30000     // Emergency message shown for 30 seconds 
+#define FOOD_CHECK_INTERVAL 5000             // Check food level every 5 seconds 
+ 
+// ============================= 
+// Food Threshold (in cm) 
+// ============================= 
+#define FOOD_THRESHOLD_CM 4 
+ 
+// ============================= 
+// Components Initialization 
+// ============================= 
+LiquidCrystal_I2C lcd(0x27, 16, 2);          // LCD I2C at address 0x27 
+OneWire oneWire(ONE_WIRE_BUS); 
+DallasTemperature sensors(&oneWire); 
+Servo servo; 
+ 
+// ============================= 
+// Time Tracking Variables 
+// ============================= 
+unsigned long lastServoTime = 0; 
+unsigned long lastCleanReminder = 0; 
+unsigned long emergencyStartTime = 0; 
+unsigned long lastFoodCheckTime = 0; 
+unsigned long lastEmergencyToneTime = 0; 
+ 
+bool showEmergency = false; 
+bool foodEmpty = false; 
+ 
+void setup() { 
+  Wire.begin(); 
+ 
+  lcd.begin(16, 2); 
+  delay(100); 
+  lcd.init(); 
+  lcd.backlight(); 
+ 
+  pinMode(TRIG_PIN, OUTPUT); 
+ 
+ 
+  pinMode(ECHO_PIN, INPUT); 
+  pinMode(BUZZER_PIN, OUTPUT); 
+ 
+  servo.attach(SERVO_PIN); 
+  sensors.begin(); 
+ 
+  lcd.setCursor(0, 0); 
+  lcd.print("Fish Tank System"); 
+  delay(2000); 
+  lcd.clear(); 
+} 
+ 
+void loop() { 
+  unsigned long now = millis(); 
+ 
+  // ------------------------------- 
+  // Trigger clean tank emergency 
+  // ------------------------------- 
+  if (now - lastCleanReminder >= CLEAN_TANK_INTERVAL && !showEmergency) { 
+    showEmergency = true; 
+    emergencyStartTime = now; 
+    lastEmergencyToneTime = now; 
+    lcd.clear(); 
+  } 
+ 
+  // ------------------------------- 
+  // Emergency Mode Display & Sound 
+  // ------------------------------- 
+  if (showEmergency) { 
+    lcd.setCursor(0, 0); 
+    lcd.print("!! Clean Tank !!"); 
+    lcd.setCursor(0, 1); 
+    lcd.print("Take Action Now"); 
+ 
+    // 3-tone emergency buzzer 
+    if (now - lastEmergencyToneTime >= 300) { 
+      static int toneStep = 0; 
+      switch (toneStep) { 
+        case 0: tone(BUZZER_PIN, 1000); break; 
+        case 1: tone(BUZZER_PIN, 1500); break; 
+        case 2: tone(BUZZER_PIN, 1200); break; 
+      } 
+      toneStep = (toneStep + 1) % 3; 
+      lastEmergencyToneTime = now; 
+    } 
+ 
+    // Turn off emergency mode after duration 
+    if (now - emergencyStartTime >= EMERGENCY_DISPLAY_DURATION) { 
+      showEmergency = false; 
+      noTone(BUZZER_PIN); 
+      lcd.clear(); 
+      lastCleanReminder = now; 
+    } 
+ 
+    return; // Skip rest during emergency 
+  } 
+ 
+  // ------------------------------- 
+  // Servo Feed Logic 
+  // ------------------------------- 
+  if (now - lastServoTime >= SERVO_INTERVAL) { 
+
+ 
+    servo.write(180); 
+    delay(500); 
+    servo.write(0); 
+    lastServoTime = now; 
+  } 
+ 
+  // ------------------------------- 
+  // Food Level Detection 
+  // ------------------------------- 
+  if (now - lastFoodCheckTime >= FOOD_CHECK_INTERVAL) { 
+    digitalWrite(TRIG_PIN, LOW); 
+    delayMicroseconds(2); 
+    digitalWrite(TRIG_PIN, HIGH); 
+    delayMicroseconds(10); 
+    digitalWrite(TRIG_PIN, LOW); 
+ 
+    long duration = pulseIn(ECHO_PIN, HIGH); 
+    long distance = duration * 0.034 / 2; 
+    foodEmpty = distance > FOOD_THRESHOLD_CM; 
+ 
+    lastFoodCheckTime = now; 
+  } 
+ 
+  // ------------------------------- 
+  // Temperature Reading 
+  // ------------------------------- 
+  sensors.requestTemperatures(); 
+  float tempC = sensors.getTempCByIndex(0); 
+ 
+  // ------------------------------- 
+  // LCD Display: Temp + Food Info 
+  // ------------------------------- 
+  lcd.setCursor(0, 0); 
+  lcd.print("Temp:"); 
+  lcd.print(tempC); 
+  lcd.print((char)223);  // Degree symbol 
+  lcd.print("C   "); 
+ 
+  lcd.setCursor(0, 1); 
+  if (foodEmpty) { 
+    lcd.print("Food: Empty     "); 
+ 
+    // Short buzzer warning 
+    tone(BUZZER_PIN, 800); delay(200); 
+    tone(BUZZER_PIN, 1000); delay(200); 
+    tone(BUZZER_PIN, 1200); delay(200); 
+    noTone(BUZZER_PIN); 
+ 
+  } else { 
+    lcd.print("Food: OK        "); 
+    noTone(BUZZER_PIN); 
+  } 
+ 
+  delay(500); 
+} 
+ 
+/* ----------------------------------------- 
+ Future Advancements of This Project: ----------------------------------------- 
+
+ 
+ 1. Add Real-Time Clock (RTC) for precise feeding schedules (e.g., 8 AM, 
+1 PM). 
+ 2. Enable WiFi/Bluetooth via ESP8266/ESP32 for smartphone control & 
+notifications. 
+ 3. Connect to a mobile app to monitor temperature and food level 
+remotely. 
+ 4. Add water level sensor and pH sensor to improve aquatic health 
+tracking. 
+ 5. Use solar panel and battery for power efficiency (green energy 
+solution). 
+ 6. Add an SD card to log historical feeding and temperature data. 
+ 7. Enable voice alerts using MP3 module or speaker for emergency 
+conditions. 
+ 8. Support camera module to visually monitor the fish tank remotely. 
+*/ 
